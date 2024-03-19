@@ -1,0 +1,455 @@
+﻿Program.Sub.Preflight.Start
+V.Global.sDir.Declare(String,"")
+V.Global.sPath.Declare(String,"")
+V.Global.sFile.Declare(String,"")
+V.Global.sDelFile.Declare(String,"")
+V.Global.iDays.Declare(Long,-1)
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.SetErrorHandler("Main_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String,"")
+V.Local.sSQL.Declare(String,"")
+V.Local.sChgDate.Declare(String,"")
+V.Local.sChgTime.Declare(String,"")
+V.Local.sDateTime.Declare(String,"")
+V.Local.sRunDate.Declare(String,"")
+V.Local.sRunTime.Declare(String,"")
+V.Local.iCntEmp.Declare(Long,0)
+v.local.sEmp.Declare(String,"")
+v.Local.iEmpTmp.Declare(Long,0)
+v.Local.sEmpFormatted.Declare(String,"")
+v.Local.sFilter.Declare(String,"")
+v.Local.bPrintLunch.Declare(Boolean,False)
+v.Local.sCurDate.Declare(String,"")
+v.Local.iCntDate.Declare(Long,0)
+v.Local.dCur.Declare(Date)
+v.Local.sCurDateFormat.Declare(String,"")
+v.Local.sTemp.Declare(String,"")
+v.Local.sMinutes.Declare(String,"")
+v.Local.fMinNum.Declare(Float,0)
+v.Local.fTest.Declare(Float,0)
+v.Local.fHours.Declare(Float,0)
+v.Local.sTime.Declare(String,"")
+v.Local.fTime1.Declare(Float,0)
+v.Local.fTime2.Declare(Float,0)
+v.Local.sTime4.Declare(String,"")
+v.Local.sShift.Declare(String,"")
+v.Local.sDept.Declare(String,"")
+V.Local.sPushFile.Declare(String,"")
+V.Local.baValue.Declare(ByteArray)
+	
+'F.Intrinsic.Control.If(V.Ambient.IsInTaskScheduler)
+	F.Intrinsic.UI.InvokeWaitDialog("Generating Paycom File")
+	F.Intrinsic.Control.CallSub(ChkDir)
+	
+	F.ODBC.Connection!con.OpenCompanyConnection(1000)
+	
+	V.Local.sSQL.Set("Select * from GCG_6825_SETTINGS where REC_ID = '1'")
+	F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL,V.Local.sSQL)
+	F.Intrinsic.Control.If(V.Local.sSQL.Trim,=,"")
+		F.Intrinsic.UI.Msgbox("Remote Paycom settings not established (6825). Program ending.","ERROR!")
+		F.ODBC.Connection!con.Close
+		F.Intrinsic.Control.End
+	F.Intrinsic.Control.EndIf
+
+	V.Local.sSQL.Set("Select DATE_LAST_CHG,TIME_LAST_CHG from GCG_6825_SETTINGS where REC_ID = '1'")
+	F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL,V.Local.sSQL)
+	F.Intrinsic.String.Split(V.Local.sSQL,"*!*",V.Local.sSQL)
+	
+	F.Intrinsic.Control.If(V.Local.sSQL.Trim,=,"")
+		V.Local.sChgDate.Set(V.Ambient.Date.PervasiveDate)
+		F.Intrinsic.String.Format(V.Local.sChgDate,"YYYYMMDD",V.Local.sChgDate)
+		F.Intrinsic.String.Build("Select min(TIME_LAST_CHG) as TIME_LAST_CHG from TIME_ATTENDANCE where DATE_LAST_CHG = '{0}';",V.Local.sChgDate,V.Local.sSQL)
+		F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL,V.Local.sSQL)
+		
+		
+		V.Local.sChgTime.Set(V.Local.sSQL.Trim)
+	F.Intrinsic.Control.Else
+		V.Local.sChgDate.Set(V.Local.sSQL(0))
+		V.Local.sChgTime.Set(V.Local.sSQL(1))
+	F.Intrinsic.Control.EndIf
+
+	V.Local.sSQL.Set("Select Push_File from GCG_6825_SETTINGS where REC_ID = '1'")
+	F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSQL,V.Local.sPushFile)
+	
+'	V.Local.sChgDate.Set("20050204")
+'	V.Local.sChgTime.Set("09302684")
+	F.Intrinsic.String.Concat(V.Local.sChgDate,V.Local.sChgTime,V.Local.sDateTime)
+	
+	F.Intrinsic.String.Build("Select a.Employee, Charge_Date, Date_In, Date_Out, Time_In,Time_Out, Dept, a.Shift from TIME_ATTENDANCE a Left Join V_Employee_Mstr b on a.Employee = b.Employee Where Pay_Type = 'H' and DATE_LAST_CHG+TIME_LAST_CHG >= '{0}' and Date_Out <> '00000000';",V.Local.sDateTime,V.Local.sSQL)
+	
+	f.Data.Datatable.CreateFromSQL("timeDT", "con", v.Local.sSQL)
+	
+	'Export Table
+	f.Data.Datatable.Create("exportDT", True)
+	f.Data.Datatable.AddColumn("exportDT", "EmployeeID", "String")
+	f.Data.Datatable.AddColumn("exportDT", "DepartmentCode", "String")
+	f.Data.Datatable.AddColumn("exportDT", "LogDate", "String")
+	f.Data.Datatable.AddColumn("exportDT", "PunchTime", "String", "")
+	f.Data.Datatable.AddColumn("exportDT", "PunchType", "String")
+	
+	'Get Distinct Employee
+	f.Data.DataView.Create("timeDT", "Temp", 22)
+	f.Data.DataView.ToDataTableDistinct("timeDT", "Temp", "emplDT", "Employee")
+	F.Data.DataView.Close("timeDT","Temp")
+	'Set Time DV
+	f.Data.DataView.Create("timeDT", "timeDV", 22)
+	f.Data.DataView.Create("timeDT", "dateDV", 22)
+	
+	f.Intrinsic.Control.For(v.Local.iCntEmp, 0, v.DataTable.emplDT.RowCount--, 1)
+		'Get Employee
+		v.Local.sEmp.Set(v.DataTable.emplDT(v.Local.iCntEmp).Employee!FieldValTrim)
+		v.Local.iEmpTmp.Set(v.Local.sEmp)
+		v.Local.sEmpFormatted.Set(v.Local.iEmpTmp)
+		'Get Shift.
+		'Create Filter.
+		f.Intrinsic.String.Build("Employee = '{0}'", v.Local.sEmp, v.Local.sFilter)
+		f.Data.DataView.SetFilter("timeDT", "timeDV", v.Local.sFilter)
+	
+		'Different Days
+		f.Data.DataView.ToDataTableDistinct("timeDT", "timeDV", "chargeDateDT", "Employee*!*charge_date*!*DEPT*!*SHIFT")
+		f.Intrinsic.Control.For(v.Local.iCntDate, 0, v.DataTable.chargeDateDT.RowCount--, 1)
+			v.Local.bPrintLunch.Set(False)
+			'Get Curremt Date
+			v.Local.sCurDate.Set(v.DataTable.chargeDateDT(v.Local.iCntDate).Charge_date!FieldValTrim)
+			f.Intrinsic.Date.ConvertDString(v.Local.sCurDate, "yyyymmdd", v.Local.dCur)
+			f.Intrinsic.String.Format(v.Local.dCur, "MM/DD/YYYY", v.Local.sCurDateFormat)
+			
+			'Create and set Filter
+			f.Intrinsic.String.Build("Employee = '{0}' and Charge_Date = '{1}'", v.Local.sEmp, v.Local.sCurDate, v.Local.sFilter)
+			f.Data.DataView.SetFilter("timeDT", "dateDV", v.Local.sFilter)
+			
+			'Get In Date
+			v.Local.sCurDate.Set(v.DataView.timeDT!dateDV(0).Date_In!FieldValTrim)
+			f.Intrinsic.Date.ConvertDString(v.Local.sCurDate, "yyyymmdd", v.Local.dCur)
+			f.Intrinsic.String.Format(v.Local.dCur, "MM/DD/YYYY", v.Local.sCurDateFormat)
+			
+			'Get Time In
+			v.Local.sTemp.Set(v.DataView.timeDT!dateDV(0).Time_In!FieldValTrim)
+			f.Intrinsic.String.Left(v.Local.sTemp, 4, v.Local.sTemp)
+			f.Intrinsic.String.Right(v.Local.sTemp, 2, v.Local.sMinutes)
+			'Round up
+			v.Local.fMinNum.Set(v.Local.sMinutes)
+			f.Intrinsic.Math.Div(v.Local.fMinNum, 15, v.Local.fTest)
+			f.Intrinsic.Math.Ceiling(v.Local.fTest, v.Local.fTest)
+			f.Intrinsic.Math.Mult(v.Local.fTest, 15, v.Local.fTest)
+			f.Intrinsic.String.Left(v.Local.sTemp, 2, v.Local.sTemp)
+			
+			f.Intrinsic.Control.If(v.Local.fTest, =, 60)
+				v.Local.fTest.Set(0)
+				v.Local.fHours.Set(v.Local.sTemp)
+				f.Intrinsic.String.LPad(v.Local.fHours.++, "0", "2", v.Local.sTemp)
+			f.Intrinsic.Control.EndIf
+			f.Intrinsic.String.LPad(v.Local.fTest, "0", "2", v.Local.sMinutes)
+			
+			f.Intrinsic.String.Build("{0}:{1}", v.Local.sTemp, v.Local.sMinutes, v.Local.sTime)
+			f.Intrinsic.String.Build("{0}{1}", v.Local.sTemp, v.Local.sMinutes, v.Local.sTime4)
+			f.Intrinsic.Control.If(v.Local.sTime4.Trim, =, "")
+				v.Local.sTime4.Set(0)
+			f.Intrinsic.Control.EndIf
+			v.Local.fTime1.Set(v.Local.sTime4)
+			'f.Intrinsic.String.Format(v.Local.sTemp, "@@:@@", v.Local.sTime)
+			f.data.Datatable.AddRow("exportDT", "EmployeeID", v.Local.iEmpTmp, "LogDate", v.Local.sCurDateFormat, "PunchTime", v.Local.sTime, "PunchType", "ID")
+			
+			'Get Dept
+			v.Local.sDept.Set(v.DataTable.chargeDateDT(v.Local.iCntDate).Dept!FieldValTrim)
+			'Get Shift
+			v.Local.sShift.Set(v.DataTable.chargeDateDT(v.Local.iCntDate).Shift!FieldValTrim)
+			
+			'Get Lunch In
+			f.Intrinsic.String.Build("Select top 1 Lun_Stop from Lunch_shift where Shift = '{0}' and Dept = '{1}'", v.Local.sShift, v.Local.sDept, v.Local.sSql)
+			f.ODBC.Connection!con.ExecuteAndReturn(v.Local.sSql, v.Local.sTime)
+			v.Local.fTime2.Set(v.Local.sTime)
+			
+			'Check if Lunch needs to be printed.
+			f.Intrinsic.Control.If(v.Local.fTime1, <, v.Local.fTime2)
+				v.Local.bPrintLunch.Set(True)
+			f.Intrinsic.Control.Else
+				v.Local.bPrintLunch.Set(False)
+			f.Intrinsic.Control.EndIf
+							
+			'Get Time Out
+			v.Local.sTemp.Set(v.DataView.timeDT!dateDV(v.DataView.timeDT!dateDV.RowCount--).Time_Out!FieldValTrim)
+			f.Intrinsic.String.Left(v.Local.sTemp, 4, v.Local.sTemp)
+			f.Intrinsic.String.Right(v.Local.sTemp, 2, v.Local.sMinutes)
+			'Round up
+			v.Local.fMinNum.Set(v.Local.sMinutes)
+			f.Intrinsic.Math.Div(v.Local.fMinNum, 15, v.Local.fTest)
+			f.Intrinsic.Math.Floor(v.Local.fTest, v.Local.fTest)
+			f.Intrinsic.Math.Mult(v.Local.fTest, 15, v.Local.fTest)
+			f.Intrinsic.String.LPad(v.Local.fTest, "0", "2", v.Local.sMinutes)
+			f.Intrinsic.String.Left(v.Local.sTemp, 2, v.Local.sTemp)
+			f.Intrinsic.String.Build("{0}:{1}", v.Local.sTemp, v.Local.sMinutes, v.Local.sTime)
+			f.Intrinsic.String.Build("{0}{1}", v.Local.sTemp, v.Local.sMinutes, v.Local.sTime4)
+			f.Intrinsic.Control.If(v.Local.sTime4.Trim, =, "")
+				v.Local.sTime4.Set(0)
+			f.Intrinsic.Control.EndIf
+			v.Local.fTime1.Set(v.Local.sTime4)
+			'Get In Date
+			v.Local.sCurDate.Set(v.DataView.timeDT!dateDV(v.DataView.timeDT!dateDV.RowCount--).Date_Out!FieldValTrim)
+			f.Intrinsic.Date.ConvertDString(v.Local.sCurDate, "yyyymmdd", v.Local.dCur)
+			f.Intrinsic.String.Format(v.Local.dCur, "MM/DD/YYYY", v.Local.sCurDateFormat)
+			
+			f.data.Datatable.AddRow("exportDT", "EmployeeID", v.Local.iEmpTmp, "LogDate", v.Local.sCurDateFormat, "PunchTime", v.Local.sTime, "PunchType", "OD")			
+			
+			f.Intrinsic.Control.If(v.Local.fTime1, <, v.Local.fTime2)
+				v.Local.bPrintLunch.Set(False)
+			f.Intrinsic.Control.Else
+				v.Local.bPrintLunch.Set(True)
+			f.Intrinsic.Control.EndIf
+				
+			f.Intrinsic.Control.If(v.Local.bPrintLunch)
+				'Get Lunch In
+				f.Intrinsic.String.Build("Select top 1 Lun_Stop from Lunch_shift where Shift = '{0}' and Dept = '{1}'", v.Local.sShift, v.Local.sDept, v.Local.sSql)
+				f.ODBC.Connection!con.ExecuteAndReturn(v.Local.sSql, v.Local.sTime)
+				f.Intrinsic.String.Format(v.Local.sTime, "@@:@@", v.Local.sTime)
+				f.data.Datatable.AddRow("exportDT", "EmployeeID", v.Local.iEmpTmp, "LogDate", v.Local.sCurDateFormat, "PunchTime", v.Local.sTime, "PunchType", "IL")
+				
+				'Get Lunch Out
+				f.Intrinsic.String.Build("Select top 1 Lun_Start from Lunch_shift where Shift = '{0}' and Dept = '{1}'", v.Local.sShift, v.Local.sDept, v.Local.sSql)
+				f.ODBC.Connection!con.ExecuteAndReturn(v.Local.sSql, v.Local.sTime)
+			
+				f.Intrinsic.String.Format(v.Local.sTime, "@@:@@", v.Local.sTime)
+				f.data.Datatable.AddRow("exportDT", "EmployeeID", v.Local.iEmpTmp, "LogDate", v.Local.sCurDateFormat, "PunchTime", v.Local.sTime, "PunchType", "OL")					
+			f.Intrinsic.Control.EndIf
+		f.Intrinsic.Control.Next(v.Local.iCntDate)
+		f.Data.Datatable.Close("chargeDateDT")
+		
+	f.Intrinsic.Control.Next(v.Local.iCntEmp)
+	
+'	F.Intrinsic.String.Build("Paycom_{0}_{1}{2}.csv","TCI01",V.Local.sChgDate,V.Local.sChgTime,V.Global.sFile)
+	F.Intrinsic.String.Build("{0}_{1}{2}.csv","TCI01",V.Local.sChgDate,V.Local.sChgTime,V.Global.sFile)
+	
+	F.Intrinsic.String.Build("{0}\{1}",V.Global.sDir,V.Global.sFile,V.Global.sPath)
+
+	F.Intrinsic.String.Format(V.Ambient.Date,"YYYYMMDD",V.Local.sRunDate)
+	F.Intrinsic.String.Format(V.Ambient.Time,"HHNNSSSS",V.Local.sRunTime)
+		
+	F.Intrinsic.String.Build("Update GCG_6825_SETTINGS set DATE_LAST_CHG = '{0}',TIME_LAST_CHG = '{1}' where REC_ID = '1'",V.Local.sRunDate,V.Local.sRunTime,V.Local.sSQL)
+	F.ODBC.Connection!con.Execute(V.Local.sSQL)
+
+	F.Intrinsic.Control.If(V.DataTable.exportDT.RowCount--,<>,-1)
+		F.Data.Datatable.SaveToCSV("exportDT",V.Global.sPath,False)
+		f.Intrinsic.File.File2String(v.Global.sPath, v.Local.sTemp)
+		f.Intrinsic.String.Replace(v.Local.sTemp, v.Ambient.DblQuote, "",v.Local.sTemp)
+		f.Intrinsic.File.DeleteFile(v.Global.sPath)
+		f.Intrinsic.File.String2File(v.Global.sPath, v.Local.sTemp)
+
+		F.Intrinsic.Control.If(V.Local.sPushFile.Trim,=,"Y")
+			F.Intrinsic.Control.CallSub(FileUpload)
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.UI.CloseWaitDialog
+'F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Main_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	F.Intrinsic.String.Build("Project: GCG_6825_PayCom_Exp.g2u {0}{0}Subroutine: {1}{0}Error Occurred {2} with description {3}",V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.CallSub(Exit)
+Function.Intrinsic.Control.EndIf
+Program.Sub.Main.End
+
+Program.Sub.Exit.Start
+F.Intrinsic.Control.SetErrorHandler("Exit_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String,"")
+
+F.Intrinsic.Control.End
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Exit_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	F.Intrinsic.Control.End
+Function.Intrinsic.Control.EndIf
+Program.Sub.Exit.End
+
+Program.Sub.FileUpload.Start
+F.Intrinsic.Control.SetErrorHandler("FileUpload_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String,"")
+V.Local.sRemoteHost.Declare(String,"")
+V.Local.sRemoteUser.Declare(String,"")
+V.Local.sRemotePwd.Declare(String,"")
+V.Local.sRemotePort.Declare(String,"")
+V.Local.sRemotePath.Declare(String,"")
+V.Local.sTemp.Declare(String,"")
+V.Local.baValue.Declare(ByteArray)
+
+F.Intrinsic.Control.If(V.DataTable.dtSettings.Exists)
+	F.Data.Datatable.Close("dtSettings")
+F.Intrinsic.Control.EndIf
+
+F.Data.Datatable.CreateFromSQL("dtSettings","con","Select * from GCG_6825_SETTINGS where REC_ID = '1'")
+
+F.Intrinsic.Control.If(V.DataTable.dtSettings.RowCount,=,0)
+	F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.EndIf
+
+V.Local.sTemp.Set(V.DataTable.dtSettings(0).RemoteHost!FieldValTrim)
+F.Intrinsic.String.ConvertString2BA(V.Local.sTemp,V.Local.baValue)
+F.Global.Encryption.Decrypt(V.Local.baValue,V.Local.sTemp)
+V.Local.sRemoteHost.Set(V.Local.sTemp)
+
+V.Local.sTemp.Set(V.DataTable.dtSettings(0).RemoteUser!FieldValTrim)
+F.Intrinsic.String.ConvertString2BA(V.Local.sTemp,V.Local.baValue)
+F.Global.Encryption.Decrypt(V.Local.baValue,V.Local.sTemp)
+V.Local.sRemoteUser.Set(V.Local.sTemp)
+
+V.Local.sTemp.Set(V.DataTable.dtSettings(0).RemotePassword!FieldValTrim)
+F.Intrinsic.String.ConvertString2BA(V.Local.sTemp,V.Local.baValue)
+F.Global.Encryption.Decrypt(V.Local.baValue,V.Local.sTemp)
+V.Local.sRemotePwd.Set(V.Local.sTemp)
+
+V.Local.sTemp.Set(V.DataTable.dtSettings(0).RemotePort!FieldValTrim)
+F.Intrinsic.String.ConvertString2BA(V.Local.sTemp,V.Local.baValue)
+F.Global.Encryption.Decrypt(V.Local.baValue,V.Local.sTemp)
+V.Local.sRemotePort.Set(V.Local.sTemp)
+
+V.Local.sTemp.Set(V.DataTable.dtSettings(0).RemotePath!FieldValTrim)
+'F.Intrinsic.String.ConvertString2BA(V.Local.sTemp,V.Local.baValue)
+'F.Global.Encryption.Decrypt(V.Local.baValue,V.Local.sTemp)
+V.Local.sRemotePath.Set(V.Local.sTemp)
+
+V.Global.sDelFile.Set(V.DataTable.dtSettings(0).DEL_FILE!FieldValTrim)
+V.Global.iDays.Set(V.DataTable.dtSettings(0).DAYS!FieldValLong)
+
+'SFTP logon credentials.
+F.Communication.SFTP.SetProperty("SSHAcceptServerAuthentication","true")
+F.Communication.SFTP.SetProperty("remoteHost",V.Local.sRemoteHost.Trim)
+F.Communication.SFTP.SetProperty("User",V.Local.sRemoteUser.Trim)
+F.Communication.SFTP.SetProperty("Password",V.Local.sRemotePwd.Trim)
+F.Communication.SFTP.SetProperty("remotePort",V.Local.sRemotePort)
+F.Communication.SFTP.Logon
+'File upload
+F.Communication.SFTP.SetProperty("RemotePath",V.Local.sRemotePath)
+'F.Communication.SFTP.SetProperty("RemotePath","/Home/000_0ra65_globalshop/inbound")
+F.Communication.SFTP.SetProperty("RemoteFile",V.Global.sFile)
+F.Communication.SFTP.SetProperty("LocalFile",V.Global.sPath)
+'F.Communication.SFTP.SetProperty("transferMode",2)
+
+F.Communication.SFTP.Upload
+
+F.Intrinsic.Control.AddEventHandler("SFTPDirList","ListDir")
+
+F.Communication.SFTP.ListDirectory
+
+F.Communication.SFTP.Logoff
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("FileUpload_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	F.Intrinsic.String.Build("Project: GCG_6825_PayCom_Exp.g2u {0}{0}Subroutine: {1}{0}Error Occurred {2} with description {3}",V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.CallSub(Exit)
+Function.Intrinsic.Control.EndIf
+Program.Sub.FileUpload.End
+
+Program.Sub.ListDir.Start
+F.Intrinsic.Control.SetErrorHandler("ListDir_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String,"")
+v.Local.sFilesList.Declare(String,"")
+v.Local.iCnt.Declare(Long,0)
+V.Local.sFileDate.Declare(String,"")
+V.Local.sDeleteFileDate.Declare(String,"")
+V.Local.iDays.Declare(Long,0)
+V.Local.sDir.Declare(String,"")
+V.Local.sFile.Declare(String,"")
+
+F.Intrinsic.Control.If(V.Global.sDir.Right1,=,"\")
+	V.Local.sDir.Set(V.Global.sDir)
+F.Intrinsic.Control.Else
+	F.Intrinsic.String.Build("{0}\",V.Global.sDir,V.Local.sDir)
+F.Intrinsic.Control.EndIf
+
+V.Global.sDelFile.Set("Y")
+
+F.Intrinsic.Control.If(V.Global.iDays,<>,-1)
+	F.Intrinsic.Math.Mult(V.Global.iDays,-1,V.Local.iDays)
+F.Intrinsic.Control.Else
+	V.Local.iDays.Set(0)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Date.DateAdd("D",V.Local.iDays,V.Ambient.Date,V.Local.sDeleteFileDate)
+F.Intrinsic.String.Format(V.Local.sDeleteFileDate,"MM/DD/YYYY",V.Local.sDeleteFileDate)
+
+F.Intrinsic.Control.If(V.Global.sDelFile.Trim,=,"Y")
+	f.Intrinsic.File.GetFileList(v.Local.sDir,v.Local.sFilesList)
+	f.Intrinsic.String.split(v.Local.sFilesList,":",v.Local.sFilesList)
+	f.Intrinsic.Control.If(v.Local.sFilesList.Trim,<>,"")
+		f.Intrinsic.Control.For(v.Local.iCnt,0,v.Local.sFilesList.UBound,1)
+			F.Intrinsic.String.Build("{0}{1}",V.Local.sDir,V.Local.sFilesList(V.Local.iCnt),V.Local.sFile)
+			F.Intrinsic.File.GetFileDateTimeExtended(v.Local.sFile,1,True,V.Local.sFileDate)
+			F.Intrinsic.String.Format(V.Local.sFileDate,"MM/DD/YYYY",V.Local.sFileDate)
+			F.Intrinsic.Control.If(V.Local.sFileDate,<,V.Local.sDeleteFileDate)
+				F.Intrinsic.Control.Try
+					F.Intrinsic.File.DeleteFile(V.Local.sFile)	
+				F.Intrinsic.Control.Catch
+				F.Intrinsic.Control.EndTry
+			F.Intrinsic.Control.EndIf
+		f.Intrinsic.Control.Next(v.Local.iCnt)
+	f.Intrinsic.Control.EndIf
+'	F.Intrinsic.Control.If(V.Args.filename,=,V.Global.sFile)
+'		F.Intrinsic.File.DeleteFile(V.Global.sPath)	
+'	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("ListDir_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	F.Intrinsic.String.Build("Project: GCG_6825_PayCom_Exp.g2u {0}{0}Subroutine: {1}{0}Error Occurred {2} with description {3}",V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.CallSub(Exit)
+Function.Intrinsic.Control.EndIf
+Program.Sub.ListDir.End
+
+Program.Sub.ChkDir.Start
+F.Intrinsic.Control.SetErrorHandler("ChkDir_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String,"")
+V.Local.sDir.Declare(String,"")
+V.Local.bChk.Declare(Boolean,False)
+
+F.Intrinsic.String.Build("{0}\CUSTOM\6825",V.Caller.GlobalDir,V.Global.sDir)
+
+F.Intrinsic.File.DirExists(V.Global.sDir,V.Local.bChk)
+
+F.Intrinsic.Control.If(V.Local.bChk,=,False)
+	F.Intrinsic.File.CreateDir(V.Global.sDir)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.String.Build("{0}\{1}",V.Global.sDir,V.Caller.CompanyCode,V.Global.sDir)
+
+F.Intrinsic.File.DirExists(V.Global.sDir,V.Local.bChk)
+
+F.Intrinsic.Control.If(V.Local.bChk,=,False)
+	F.Intrinsic.File.CreateDir(V.Global.sDir)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("ChkDir_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	F.Intrinsic.String.Build("Project: GCG_6825_PayCom_Exp.g2u {0}{0}Subroutine: {1}{0}Error Occurred {2} with description {3}",V.Ambient.NewLine,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.CallSub(Exit)
+Function.Intrinsic.Control.EndIf
+Program.Sub.ChkDir.End
+
+Program.Sub.Comments.Start
+${$5$}$2.0.0.0$}$2
+${$6$}$rking$}$20221010163228510$}$QNdZLVy4bWuiWa9jh1ZTiKVzNnEzrvL4IPXhzkJ7hrJ6gXktcn8RB3RG9j7NbAFJyMZMvDnL9Yo=
+Program.Sub.Comments.End
